@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JTT</title>
+    <title>Mostek Jacdac ➔ Tasker</title>
     <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
@@ -85,32 +85,44 @@
                     throw new Error("Brak wsparcia dla WebUSB w przeglądarce!");
                 }
 
-                log("Inicjalizacja oficjalnego WebBus...");
-                // Oficjalna, uniwersalna metoda startu Jacdac w przeglądarkach
+                log("Inicjalizacja Jacdac z trybem Dongle/Bridge...");
+                
+                // Tworzymy szynę dla przeglądarki
                 bus = jacdac.createWebBus();
                 
+                // WYMUSZENIE MOSTKA: Wyłączamy tryb pasywny, żeby micro:bit przesyłał pakiety dalej
+                bus.passive = false; 
+
                 log("Otwieranie okna wyboru urządzenia USB...");
                 await bus.connect();
                 
                 statusDiv.innerText = "Połączono z Jacdac!";
                 statusDiv.style.color = "#00adb5";
-                log("Sukces! Urządzenie podłączone. Słucham szyny Jacdac...");
+                log("Sukces! Mostek USB aktywny. Nasłuchuję sygnałów z guzików...");
 
+                // Wykrywanie fizycznego wpięcia jakiegokolwiek urządzenia do sieci Jacdac
+                bus.on('deviceConnect', (device) => {
+                    log(`Nowe urządzenie w szynie: ${device.shortId} (${device.name || 'Moduł Jacdac'})`);
+                });
+
+                // Nasłuchiwanie usług (serwisów) rozgłaszanych przez micro:bit
                 bus.on('serviceAnnounce', (service) => {
-                    // Serwis przycisku: 0x1473d260 (dziesiętnie: 343134816)
+                    // Serwis przycisku: 0x1473d260 (lub dziesiętnie 343134816)
                     if (service.serviceClass === 0x1473d260 || service.serviceClass === 343134816) {
                         const devId = service.device.deviceId;
 
                         if (!detectedButtons.includes(devId)) {
                             detectedButtons.push(devId);
-                            log(`Wykryto przycisk! ID: ${devId.substring(0,6)}... jako Przycisk ${detectedButtons.length}`);
+                            log(`[ZAREJESTROWANO] Wykryto fizyczny guzik! Krótkie ID: ${service.device.shortId} -> Przypisany jako Przycisk ${detectedButtons.length}`);
                         }
 
+                        // Rejestracja zdarzeń kliknięcia dla tego przycisku
                         service.on('event', (packet) => {
-                            if (packet.code === 0x1) { // 0x1 = Down
+                            // 0x1 oznacza ButtonEvent.Down (wciśnięcie fizyczne)
+                            if (packet.code === 0x1) {
                                 const buttonIndex = detectedButtons.indexOf(devId);
                                 const buttonNum = buttonIndex + 1;
-                                log(`Fizyczny Przycisk ${buttonNum} kliknięty!`);
+                                log(`[KLIK] Fizyczny Przycisk ${buttonNum} został naciśnięty!`);
                                 sendToTasker(buttonNum);
                             }
                         });
@@ -119,7 +131,7 @@
 
             } catch (err) {
                 statusDiv.innerText = "Błąd połączenia";
-                log(`BŁĄD: ${err.message}`);
+                log(`BŁĄD STARTU: ${err.message}`);
                 console.error(err);
             }
         });
