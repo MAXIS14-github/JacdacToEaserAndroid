@@ -2,102 +2,61 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mostek Jacdac ➔ Easer V2</title><!--ignore title changes in changes comments-->
+    <title>Ostateczna Naprawa Mostka</title>
     <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
-        button { padding: 12px 24px; font-size: 16px; cursor: pointer; background: #00adb5; border: none; color: white; border-radius: 5px; margin: 10px; }
-        button:hover { background: #007a80; }
-        #toggleLogBtn { background: #393e46; }
-        #status { margin-top: 20px; font-weight: bold; color: #ff2e63; font-size: 18px; }
-        .log-container { display: none; margin-top: 20px; text-align: left; }
-        .log { background: #222831; padding: 15px; border-radius: 5px; min-height: 120px; font-family: monospace; overflow-y: auto; max-height: 250px; white-space: pre-wrap; color: #a3f7bf; }
+        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #00adb5; border: none; color: white; border-radius: 5px; }
+        #log { background: #222831; padding: 15px; margin-top: 20px; text-align: left; font-family: monospace; min-height: 200px; color: #a3f7bf; white-space: pre-wrap; }
     </style>
 </head>
 <body>
 
-    <h1>Mostek Jacdac ➔ Easer (Pancerne Połączenie)</h1>
-    <p>Podłącz micro:bit i kliknij przycisk połączenia.</p>
-
-    <button id="connectBtn">Połącz z Jacdac</button>
-    <button id="toggleLogBtn">Pokaż logi</button>
-    
-    <div id="status">Status: Rozłączono</div>
-
-    <div id="logContainer" class="log-container">
-        <h3>Logi operacyjne:</h3>
-        <div id="log" class="log">Uruchomiono...</div>
-    </div>
+    <h1>Mostek Naprawczy Jacdac</h1>
+    <button id="connectBtn">POŁĄCZ Z MICRO:BIT</button>
+    <div id="log">Logi systemowe:\n</div>
 
     <script>
         const connectBtn = document.getElementById('connectBtn');
-        const toggleLogBtn = document.getElementById('toggleLogBtn');
-        const statusDiv = document.getElementById('status');
-        const logContainer = document.getElementById('logContainer');
         const logDiv = document.getElementById('log');
 
-        let bus = null;
-
-        function log(message) {
-            const time = new Date().toLocaleTimeString();
-            logDiv.innerHTML += `[${time}] ${message}\n`;
-            logDiv.scrollTop = logDiv.scrollHeight;
+        function log(msg) {
+            logDiv.innerText += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
         }
 
-        toggleLogBtn.addEventListener('click', () => {
-            logContainer.style.display = (logContainer.style.display === "none" || logContainer.style.display === "") ? "block" : "none";
-            toggleLogBtn.innerText = logContainer.style.display === "block" ? "Ukryj logi" : "Pokaż logi";
-        });
-
-        // Wysyłanie sygnału metodą ukrytego piksela (całkowicie odporne na blokady Androida)
-        function triggerEaserEvent(eventName) {
-            log(`➔ Wysyłam żądanie wyzwalacza: ${eventName}`);
-            
-            // Tworzymy ukryty element graficzny, który zmusza system do wysłania komendy do Easera
-            const kicker = new Image();
-            kicker.src = `http://localhost:23456/trigger/${eventName}`;
-            
-            // Czyścimy pamięć po wysłaniu
-            kicker.onload = kicker.onerror = () => {
-                kicker.onload = kicker.onerror = null;
-            };
+        // Funkcja wysyłająca intencję do Easera (Wadery)
+        function sendIntentToEaser() {
+            log("➔ Strzał intencji do Easera!");
+            const intentUrl = `intent:#Intent;action=pl.maxis.JACDAC_ACTION;category=android.intent.category.DEFAULT;S.guzik=guzik1_pressed;end`;
+            const link = document.createElement('a');
+            link.href = intentUrl;
+            link.click();
         }
 
         connectBtn.addEventListener('click', async () => {
             try {
-                statusDiv.innerText = "Łączenie...";
-                bus = jacdac.createWebBus();
-                bus.passive = false;
-
-                await bus.connect();
+                log("Uruchamianie szyny Jacdac...");
                 
-                statusDiv.innerText = "Połączono z Jacdac!";
-                statusDiv.style.color = "#00adb5";
-                log("[System] Nawiązano stabilne połączenie ze sprzętem.");
-
-                bus.on('serviceConnect', (service) => {
-                    // Kod usługi przycisku w standardzie Jacdac (0x1473d260)
-                    if (service.serviceClass === 0x1473d260) {
-                        log(`[SPRZĘT] Wykryto fizyczny przycisk o ID: ${service.device.shortId}`);
-
-                        // Nasłuchiwanie czystych mikro-zdarzeń zamiast strumienia bajtów
-                        service.on('event', (packet) => {
-                            if (packet.eventCode === 0x1) { 
-                                log("[Fizyczny Klik] WCIŚNIĘTY (guzik1_pressed)");
-                                triggerEaserEvent("guzik1_pressed");
-                            }
-                            if (packet.eventCode === 0x2) { 
-                                log("[Fizyczny Klik] PUSZCZONY (guzik1_released)");
-                                triggerEaserEvent("guzik1_released");
-                            }
-                        });
+                // Tworzymy transport WebUSB bezpośrednio
+                const bus = jacdac.createWebBus();
+                
+                // Wymuszamy start nasłuchiwania pakietów
+                bus.on('packetReceive', (packet) => {
+                    // Kod usługi przycisku (0x1473d260) lub ogólny pakiet zdarzenia
+                    if (packet.serviceNumber !== 0 && packet.isEvent) {
+                        if (packet.eventCode === 0x1) {
+                            log(" FIZYCZNY KLIK WYKRYTY (Event 0x1)");
+                            sendIntentToEaser();
+                        }
                     }
                 });
 
+                log("Otwieranie okna parowania przeglądarki...");
+                await bus.connect();
+                log(" Sukces! Strona nawiązała kontakt z micro:bitem.");
+
             } catch (err) {
-                statusDiv.innerText = "Błąd połączenia";
-                log(`BŁĄD: ${err.message}`);
+                log(`BŁĄD KODU: ${err.message}`);
             }
         });
     </script>
