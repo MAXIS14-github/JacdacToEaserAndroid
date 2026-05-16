@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mostek Jacdac ➔ Easer Transmisja v2</title>
+    <title>Mostek Jacdac ➔ Easer V2</title><!--ignore title changes in changes comments-->
     <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
@@ -17,7 +17,7 @@
 </head>
 <body>
 
-    <h1>Mostek Jacdac ➔ Easer (Transmisja v2)</h1>
+    <h1>Mostek Jacdac ➔ Easer (Pancerne Połączenie)</h1>
     <p>Podłącz micro:bit i kliknij przycisk połączenia.</p>
 
     <button id="connectBtn">Połącz z Jacdac</button>
@@ -26,7 +26,7 @@
     <div id="status">Status: Rozłączono</div>
 
     <div id="logContainer" class="log-container">
-        <h3>Logi transmisji systemowej:</h3>
+        <h3>Logi operacyjne:</h3>
         <div id="log" class="log">Uruchomiono...</div>
     </div>
 
@@ -50,16 +50,18 @@
             toggleLogBtn.innerText = logContainer.style.display === "block" ? "Ukryj logi" : "Pokaż logi";
         });
 
-        // Wysyłanie ulepszonej intencji systemowej (z flagą uruchamiania w nowym oknie)
-        function sendIntentToEaser(status) {
-            // Dodajemy launchFlags=0x10000000 (FLAG_ACTIVITY_NEW_TASK), co pozwala na start apek z tła
-            const intentUrl = `intent:#Intent;action=pl.maxis.JACDAC_ACTION;category=android.intent.category.DEFAULT;launchFlags=0x10000000;S.guzik=${status};end`;
+        // Wysyłanie sygnału metodą ukrytego piksela (całkowicie odporne na blokady Androida)
+        function triggerEaserEvent(eventName) {
+            log(`➔ Wysyłam żądanie wyzwalacza: ${eventName}`);
             
-            log(`➔ Nadaję intencję systemową: ${status}`);
+            // Tworzymy ukryty element graficzny, który zmusza system do wysłania komendy do Easera
+            const kicker = new Image();
+            kicker.src = `http://localhost:23456/trigger/${eventName}`;
             
-            const link = document.createElement('a');
-            link.href = intentUrl;
-            link.click();
+            // Czyścimy pamięć po wysłaniu
+            kicker.onload = kicker.onerror = () => {
+                kicker.onload = kicker.onerror = null;
+            };
         }
 
         connectBtn.addEventListener('click', async () => {
@@ -72,22 +74,22 @@
                 
                 statusDiv.innerText = "Połączono z Jacdac!";
                 statusDiv.style.color = "#00adb5";
-                log("Szyna aktywna. Mapowanie fizycznych kliknięć na intencje...");
+                log("[System] Nawiązano stabilne połączenie ze sprzętem.");
 
-                // Łapiemy bezpośrednią usługę przycisku przez Jacdac
                 bus.on('serviceConnect', (service) => {
+                    // Kod usługi przycisku w standardzie Jacdac (0x1473d260)
                     if (service.serviceClass === 0x1473d260) {
-                        log(`[SPRZĘT] Sparowano przycisk: ${service.device.shortId}`);
+                        log(`[SPRZĘT] Wykryto fizyczny przycisk o ID: ${service.device.shortId}`);
 
-                        // Precyzyjne nasłuchiwanie zdarzeń przycisku
+                        // Nasłuchiwanie czystych mikro-zdarzeń zamiast strumienia bajtów
                         service.on('event', (packet) => {
-                            if (packet.eventCode === 0x1) { // Kliknięcie (Down)
-                                log("[Fizyczny Klik] WCIŚNIĘTY");
-                                sendIntentToEaser("guzik1_pressed");
+                            if (packet.eventCode === 0x1) { 
+                                log("[Fizyczny Klik] WCIŚNIĘTY (guzik1_pressed)");
+                                triggerEaserEvent("guzik1_pressed");
                             }
-                            if (packet.eventCode === 0x2) { // Puszczenie (Up)
-                                log("[Fizyczny Klik] PUSZCZONY");
-                                sendIntentToEaser("guzik1_released");
+                            if (packet.eventCode === 0x2) { 
+                                log("[Fizyczny Klik] PUSZCZONY (guzik1_released)");
+                                triggerEaserEvent("guzik1_released");
                             }
                         });
                     }
