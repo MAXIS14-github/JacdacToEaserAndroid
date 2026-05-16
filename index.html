@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jacdac to Tasker Bridge</title>
+    <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
+        button { padding: 12px 24px; font-size: 16px; cursor: pointer; background: #00adb5; border: none; color: white; border-radius: 5px; margin: 10px; }
+        button:hover { background: #007a80; }
+        #toggleLogBtn { background: #393e46; }
+        #status { margin-top: 20px; font-weight: bold; color: #ff2e63; }
+        .log-container { display: none; margin-top: 20px; text-align: left; }
+        .log { background: #222831; padding: 15px; border-radius: 5px; min-height: 120px; font-family: monospace; overflow-y: auto; max-height: 250px; white-space: pre-wrap; }
+        .config-box { margin: 20px auto; padding: 15px; background: #1a1a1a; border-radius: 8px; max-width: 400px; }
+        input { padding: 8px; width: 80%; background: #222; border: 1px solid #444; color: #fff; text-align: center; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <h1>Mostek Jacdac ➔ Tasker</h1>
+    <p>Podłącz micro:bit przez USB i kliknij przycisk połączenia.</p>
+    
+    <div class="config-box">
+        <label for="taskerIp">Adres IP telefonu z portem Taskera:</label><br><br>
+        <input type="text" id="taskerIp" value="http://localhost:1821">
+    </div>
+
+    <button id="connectBtn">Połącz z Jacdac (USB)</button>
+    <button id="toggleLogBtn">Pokaż logi</button>
+    
+    <div id="status">Status: Rozłączono</div>
+
+    <div id="logContainer" class="log-container">
+        <h3>Logi zdarzeń:</h3>
+        <div id="log" class="log">Oczekiwanie na uruchomienie...</div>
+    </div>
+
+    <script>
+        const connectBtn = document.getElementById('connectBtn');
+        const toggleLogBtn = document.getElementById('toggleLogBtn');
+        const statusDiv = document.getElementById('status');
+        const logContainer = document.getElementById('logContainer');
+        const logDiv = document.getElementById('log');
+        const taskerIpInput = document.getElementById('taskerIp');
+
+        let detectedButtons = [];
+
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // Ukrywanie / Pokazywanie logów
+        toggleLogBtn.addEventListener('click', () => {
+            if (logContainer.style.display === "none" || logContainer.style.display === "") {
+                logContainer.style.display = "block";
+                toggleLogBtn.innerText = "Ukryj logi";
+            } else {
+                logContainer.style.display = "none";
+                toggleLogBtn.innerText = "Pokaż logi";
+            }
+        });
+
+        // Funkcja wysyłająca żądanie HTTP do Taskera
+        async function sendToTasker(guzikId) {
+            const baseUrl = taskerIpInput.value.trim();
+            // Tworzymy URL np. http://localhost:1821/guzik1 lub /guzik2
+            const url = `${baseUrl}/guzik${guzikId}`;
+            
+            log(`Wysyłanie żądania do Taskera: ${url}`);
+            
+            try {
+                // Używamy trybu 'no-cors', ponieważ lokalny serwer Taskera może nie zwracać nagłówków CORS
+                await fetch(url, { method: 'GET', mode: 'no-cors' });
+                log(`Sygnał dla guzik${guzikId} wysłany pomyślnie.`);
+            } catch (err) {
+                log(`Błąd wysyłania do Taskera: ${err.message}`);
+            }
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                statusDiv.innerText = "Łączenie...";
+                log("Inicjalizacja połączenia USB...");
+
+                const transport = jacdac.createWebUSBTransport();
+                const bus = new jacdac.Bus([transport]);
+                
+                await bus.connect();
+                
+                statusDiv.innerText = "Połączono z Jacdac!";
+                statusDiv.style.color = "#00adb5";
+                log("Połączono z micro:bitem. Oczekiwanie na kliknięcia...");
+
+                bus.on(jacdac.SERVICE_ANNOUNCE, (service) => {
+                    // Kod dla serwisu przycisku: 0x1473d260
+                    if (service.serviceClass === 0x1473d260) {
+                        const devId = service.device.deviceId;
+
+                        if (!detectedButtons.includes(devId)) {
+                            detectedButtons.push(devId);
+                            log(`Wykryto moduł przycisku ID: ${devId.substring(0,6)}... Przypisany jako: Przycisk ${detectedButtons.length}`);
+                        }
+
+                        service.on(jacdac.EVENT, (packet) => {
+                            // 0x1 = ButtonEvent.Down (wciśnięcie)
+                            if (packet.code === 0x1) {
+                                const buttonIndex = detectedButtons.indexOf(devId);
+                                const buttonNum = buttonIndex + 1; // Przycisk 1 lub 2
+                                
+                                log(`Fizyczny Przycisk ${buttonNum} został wciśnięty!`);
+                                sendToTasker(buttonNum);
+                            }
+                        });
+                    }
+                });
+
+            } catch (err) {
+                statusDiv.innerText = "Błąd połączenia";
+                log(`Błąd połączenia Jacdac: ${err.message}`);
+                console.error(err);
+            }
+        });
+    </script>
+</body>
+</html>
