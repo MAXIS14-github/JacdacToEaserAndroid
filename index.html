@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mostek Jacdac ➔ Easer (Wadera) Real-Test</title>
+    <title>Mostek Jacdac ➔ Easer Transmisja v2</title>
     <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
@@ -17,17 +17,17 @@
 </head>
 <body>
 
-    <h1>Mostek Jacdac ➔ Easer (Wadera)</h1>
-    <p>Podłącz micro:bit kablowo i kliknij przycisk połączenia.</p>
+    <h1>Mostek Jacdac ➔ Easer (Transmisja v2)</h1>
+    <p>Podłącz micro:bit i kliknij przycisk połączenia.</p>
 
-    <button id="connectBtn">Połącz z Jacdac (USB)</button>
+    <button id="connectBtn">Połącz z Jacdac</button>
     <button id="toggleLogBtn">Pokaż logi</button>
     
     <div id="status">Status: Rozłączono</div>
 
     <div id="logContainer" class="log-container">
-        <h3>Logi transmisji sprzętowej:</h3>
-        <div id="log" class="log">Uruchomiono mostek...</div>
+        <h3>Logi transmisji systemowej:</h3>
+        <div id="log" class="log">Uruchomiono...</div>
     </div>
 
     <script>
@@ -37,8 +37,6 @@
         const logContainer = document.getElementById('logContainer');
         const logDiv = document.getElementById('log');
 
-        let deviceList = [];
-        let lastRawValues = {}; 
         let bus = null;
 
         function log(message) {
@@ -48,25 +46,17 @@
         }
 
         toggleLogBtn.addEventListener('click', () => {
-            if (logContainer.style.display === "none" || logContainer.style.display === "") {
-                logContainer.style.display = "block";
-                toggleLogBtn.innerText = "Ukryj logi";
-            } else {
-                logContainer.style.display = "none";
-                toggleLogBtn.innerText = "Pokaż logi";
-            }
+            logContainer.style.display = (logContainer.style.display === "none" || logContainer.style.display === "") ? "block" : "none";
+            toggleLogBtn.innerText = logContainer.style.display === "block" ? "Ukryj logi" : "Pokaż logi";
         });
 
-        // Wysyłanie natywnego komunikatu Android Intent
-        function sendIntentToEaser(guzikId, stateType) {
-            const valueToSend = `guzik${guzikId}_${stateType}`;
+        // Wysyłanie ulepszonej intencji systemowej (z flagą uruchamiania w nowym oknie)
+        function sendIntentToEaser(status) {
+            // Dodajemy launchFlags=0x10000000 (FLAG_ACTIVITY_NEW_TASK), co pozwala na start apek z tła
+            const intentUrl = `intent:#Intent;action=pl.maxis.JACDAC_ACTION;category=android.intent.category.DEFAULT;launchFlags=0x10000000;S.guzik=${status};end`;
             
-            // Rejestrujemy dokładnie to, co Easer (Wadera) filtruje w systemie
-            const intentUrl = `intent:#Intent;action=pl.maxis.JACDAC_ACTION;category=android.intent.category.DEFAULT;S.guzik=${valueToSend};end`;
+            log(`➔ Nadaję intencję systemową: ${status}`);
             
-            log(`➔ TRANSMISJA DO SYSTEMU: ${valueToSend}`);
-            
-            // Strzał intencji w tle
             const link = document.createElement('a');
             link.href = intentUrl;
             link.click();
@@ -76,52 +66,36 @@
             try {
                 statusDiv.innerText = "Łączenie...";
                 bus = jacdac.createWebBus();
-                bus.passive = false; 
+                bus.passive = false;
 
                 await bus.connect();
                 
                 statusDiv.innerText = "Połączono z Jacdac!";
                 statusDiv.style.color = "#00adb5";
-                log("[System] Szyna Jacdac nasłuchuje micro:bita.");
+                log("Szyna aktywna. Mapowanie fizycznych kliknięć na intencje...");
 
-                bus.on('packetReceive', (packet) => {
-                    if (!packet.data || packet.data.length === 0 || packet.serviceNumber === 0) return;
+                // Łapiemy bezpośrednią usługę przycisku przez Jacdac
+                bus.on('serviceConnect', (service) => {
+                    if (service.serviceClass === 0x1473d260) {
+                        log(`[SPRZĘT] Sparowano przycisk: ${service.device.shortId}`);
 
-                    const devId = packet.deviceId;
-                    const shortId = packet.device ? packet.device.shortId : devId.substring(0,4);
-
-                    if (!deviceList.includes(devId)) {
-                        deviceList.push(devId);
-                        lastRawValues[devId] = -1;
-                        log(`[WYKRYTO SPRZĘT] Nowy moduł: ${shortId} ➔ Przypisany jako ID: ${deviceList.length}`);
-                    }
-
-                    const deviceIndex = deviceList.indexOf(devId) + 1;
-                    let currentByte = packet.data[0];
-
-                    if (packet.isEvent) {
-                        if (packet.eventCode === 0x1) currentByte = 1;
-                        if (packet.eventCode === 0x2) currentByte = 0;
-                    }
-
-                    if (currentByte !== lastRawValues[devId]) {
-                        if (currentByte === 0 || currentByte === 1) {
-                            lastRawValues[devId] = currentByte;
-
-                            if (currentByte === 1) {
-                                log(`[Fizyczny klik] Moduł ${shortId}: WCIŚNIĘTY`);
-                                sendIntentToEaser(deviceIndex, "pressed");
-                            } else {
-                                log(`[Fizyczny klik] Moduł ${shortId}: PUSZCZONY`);
-                                sendIntentToEaser(deviceIndex, "released");
+                        // Precyzyjne nasłuchiwanie zdarzeń przycisku
+                        service.on('event', (packet) => {
+                            if (packet.eventCode === 0x1) { // Kliknięcie (Down)
+                                log("[Fizyczny Klik] WCIŚNIĘTY");
+                                sendIntentToEaser("guzik1_pressed");
                             }
-                        }
+                            if (packet.eventCode === 0x2) { // Puszczenie (Up)
+                                log("[Fizyczny Klik] PUSZCZONY");
+                                sendIntentToEaser("guzik1_released");
+                            }
+                        });
                     }
                 });
 
             } catch (err) {
                 statusDiv.innerText = "Błąd połączenia";
-                log(`BŁĄD PAROWANIA: ${err.message}`);
+                log(`BŁĄD: ${err.message}`);
             }
         });
     </script>
