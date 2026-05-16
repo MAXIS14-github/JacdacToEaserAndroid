@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mostek Jacdac ➔ Tasker</title>
+    <title>Jacdac➔Tasker</title>
     <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
@@ -46,6 +46,7 @@
         const taskerIpInput = document.getElementById('taskerIp');
 
         let detectedButtons = [];
+        let lastStates = {}; // Zapamiętujemy poprzedni stan guzika (żeby nie wysyłać spamu)
         let bus = null;
 
         function log(message) {
@@ -64,13 +65,14 @@
             }
         });
 
-        async function sendToTasker(guzikId) {
+        async function sendToTasker(guzikId, stateType) {
             const baseUrl = taskerIpInput.value.trim();
-            const url = `${baseUrl}/guzik${guzikId}`;
+            // Przesyłamy np. /guzik1_pressed lub /guzik1_released
+            const url = `${baseUrl}/guzik${guzikId}_${stateType}`;
             log(`Wysyłam do Taskera: ${url}`);
             try {
                 await fetch(url, { method: 'GET', mode: 'no-cors' });
-                log(`Sukces: guzik${guzikId}`);
+                log(`Sukces: guzik${guzikId} (${stateType})`);
             } catch (err) {
                 log(`Błąd Taskera: ${err.message}`);
             }
@@ -85,12 +87,8 @@
                     throw new Error("Brak wsparcia dla WebUSB w przeglądarce!");
                 }
 
-                log("Inicjalizacja Jacdac z trybem Dongle/Bridge...");
-                
-                // Tworzymy szynę dla przeglądarki
+                log("Inicjalizacja Jacdac (tryb aktywnego odpytywania)...");
                 bus = jacdac.createWebBus();
-                
-                // WYMUSZENIE MOSTKA: Wyłączamy tryb pasywny, żeby micro:bit przesyłał pakiety dalej
                 bus.passive = false; 
 
                 log("Otwieranie okna wyboru urządzenia USB...");
@@ -98,32 +96,43 @@
                 
                 statusDiv.innerText = "Połączono z Jacdac!";
                 statusDiv.style.color = "#00adb5";
-                log("Sukces! Mostek USB aktywny. Nasłuchuję sygnałów z guzików...");
+                log("Sukces! Słucham zmian rejestrów przycisków...");
 
-                // Wykrywanie fizycznego wpięcia jakiegokolwiek urządzenia do sieci Jacdac
                 bus.on('deviceConnect', (device) => {
-                    log(`Nowe urządzenie w szynie: ${device.shortId} (${device.name || 'Moduł Jacdac'})`);
+                    log(`Wykryto urządzenie w sieci USB: ${device.shortId}`);
                 });
 
-                // Nasłuchiwanie usług (serwisów) rozgłaszanych przez micro:bit
+                // Zamiast czekać na zdarzenia (.on('event')), sprawdzamy raporty serwisów
                 bus.on('serviceAnnounce', (service) => {
-                    // Serwis przycisku: 0x1473d260 (lub dziesiętnie 343134816)
+                    // Kod klasy Button: 0x1473d260
                     if (service.serviceClass === 0x1473d260 || service.serviceClass === 343134816) {
                         const devId = service.device.deviceId;
 
                         if (!detectedButtons.includes(devId)) {
                             detectedButtons.push(devId);
-                            log(`[ZAREJESTROWANO] Wykryto fizyczny guzik! Krótkie ID: ${service.device.shortId} -> Przypisany jako Przycisk ${detectedButtons.length}`);
+                            lastStates[devId] = false; // Domyślnie puszczony
+                            log(`[ZAREJESTROWANO] Guzik ${service.device.shortId} -> Jako Przycisk ${detectedButtons.length}`);
                         }
 
-                        // Rejestracja zdarzeń kliknięcia dla tego przycisku
-                        service.on('event', (packet) => {
-                            // 0x1 oznacza ButtonEvent.Down (wciśnięcie fizyczne)
-                            if (packet.code === 0x1) {
-                                const buttonIndex = detectedButtons.indexOf(devId);
-                                const buttonNum = buttonIndex + 1;
-                                log(`[KLIK] Fizyczny Przycisk ${buttonNum} został naciśnięty!`);
-                                sendToTasker(buttonNum);
+                        // Pobieramy rejestr "isPressed" (Kod rejestru: 0x101)
+                        const pressedRegister = service.register(0x101);
+                        
+                        // Zmuszamy magistralę do automatycznego odpytywania tego rejestru
+                        pressedRegister.subscribe(() => {
+                            const isPressed = !!pressedRegister.boolValue;
+                            const buttonNum = detectedButtons.indexOf(devId) + 1;
+                            
+                            // Reagujemy tylko wtedy, gdy stan się realnie zmienił
+                            if (isPressed !== lastStates[devId]) {
+                                lastStates[devId] = isPressed;
+                                
+                                if (isPressed) {
+                                    log(`[STAN] Fizyczny Przycisk ${buttonNum}: is pressed`);
+                                    sendToTasker(buttonNum, "pressed");
+                                } else {
+                                    log(`[STAN] Fizyczny Przycisk ${buttonNum}: is released`);
+                                    sendToTasker(buttonNum, "released");
+                                }
                             }
                         });
                     }
@@ -131,7 +140,7 @@
 
             } catch (err) {
                 statusDiv.innerText = "Błąd połączenia";
-                log(`BŁĄD STARTU: ${err.message}`);
+                log(`BŁĄD: ${err.message}`);
                 console.error(err);
             }
         });
