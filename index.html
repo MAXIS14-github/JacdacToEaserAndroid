@@ -46,7 +46,7 @@
         const taskerIpInput = document.getElementById('taskerIp');
 
         let detectedButtons = [];
-        let lastStates = {}; // Zapamiętujemy poprzedni stan guzika (żeby nie wysyłać spamu)
+        let lastStates = {}; 
         let bus = null;
 
         function log(message) {
@@ -67,7 +67,6 @@
 
         async function sendToTasker(guzikId, stateType) {
             const baseUrl = taskerIpInput.value.trim();
-            // Przesyłamy np. /guzik1_pressed lub /guzik1_released
             const url = `${baseUrl}/guzik${guzikId}_${stateType}`;
             log(`Wysyłam do Taskera: ${url}`);
             try {
@@ -81,60 +80,60 @@
         connectBtn.addEventListener('click', async () => {
             try {
                 statusDiv.innerText = "Łączenie...";
-                log("Sprawdzanie wsparcia dla WebUSB...");
                 
                 if (!navigator.usb) {
                     throw new Error("Brak wsparcia dla WebUSB w przeglądarce!");
                 }
 
-                log("Inicjalizacja Jacdac (tryb aktywnego odpytywania)...");
+                log("Inicjalizacja pancernego nasłuchu pakietów...");
                 bus = jacdac.createWebBus();
                 bus.passive = false; 
 
-                log("Otwieranie okna wyboru urządzenia USB...");
                 await bus.connect();
                 
                 statusDiv.innerText = "Połączono z Jacdac!";
                 statusDiv.style.color = "#00adb5";
-                log("Sukces! Słucham zmian rejestrów przycisków...");
+                log("Mostek aktywny. Słucham surowych danych z szyny...");
 
                 bus.on('deviceConnect', (device) => {
                     log(`Wykryto urządzenie w sieci USB: ${device.shortId}`);
+                    
+                    // Każdemu podłączonemu urządzeniu (oprócz micro:bita) przypisujemy unikalną rolę przycisku
+                    // Zakładamy, że urządzenia inne niż główny mostek to Twoje guziki
+                    if (!detectedButtons.includes(device.deviceId) && device.shortId !== "GS41") {
+                        detectedButtons.push(device.deviceId);
+                        lastStates[device.deviceId] = 0; // Stan początkowy: puszczony
+                        log(`[MAPOWANIE] Urządzenie ${device.shortId} przypisane jako Przycisk ${detectedButtons.length}`);
+                    }
                 });
 
-                // Zamiast czekać na zdarzenia (.on('event')), sprawdzamy raporty serwisów
-                bus.on('serviceAnnounce', (service) => {
-                    // Kod klasy Button: 0x1473d260
-                    if (service.serviceClass === 0x1473d260 || service.serviceClass === 343134816) {
-                        const devId = service.device.deviceId;
-
-                        if (!detectedButtons.includes(devId)) {
-                            detectedButtons.push(devId);
-                            lastStates[devId] = false; // Domyślnie puszczony
-                            log(`[ZAREJESTROWANO] Guzik ${service.device.shortId} -> Jako Przycisk ${detectedButtons.length}`);
-                        }
-
-                        // Pobieramy rejestr "isPressed" (Kod rejestru: 0x101)
-                        const pressedRegister = service.register(0x101);
+                // CAŁKOWITY PODSŁUCH: Przechwytujemy każdy pakiet krążący w sieci USB
+                bus.on('packetReceive', (packet) => {
+                    // Interesują nas pakiety z danymi (raporty z rejestrów lub zdarzenia)
+                    if (packet.isRegisterReport || packet.isEvent) {
+                        const devId = packet.deviceId;
                         
-                        // Zmuszamy magistralę do automatycznego odpytywania tego rejestru
-                        pressedRegister.subscribe(() => {
-                            const isPressed = !!pressedRegister.boolValue;
+                        // Sprawdzamy, czy pakiet pochodzi z jednego z zmapowanych guzików
+                        if (detectedButtons.includes(devId)) {
                             const buttonNum = detectedButtons.indexOf(devId) + 1;
                             
-                            // Reagujemy tylko wtedy, gdy stan się realnie zmienił
-                            if (isPressed !== lastStates[devId]) {
-                                lastStates[devId] = isPressed;
+                            // Pobieramy surową wartość liczbową przesłaną w pakiecie danych
+                            // W Jacdac stan isPressed to zazwyczaj pierwszy bajt o wartości 1 lub 0
+                            const rawData = packet.data && packet.data.length > 0 ? packet.data[0] : 0;
+                            
+                            // Jeśli wartość zmieniła się od ostatniego razu
+                            if (rawData !== lastStates[devId]) {
+                                lastStates[devId] = rawData;
                                 
-                                if (isPressed) {
-                                    log(`[STAN] Fizyczny Przycisk ${buttonNum}: is pressed`);
+                                if (rawData > 0) {
+                                    log(`[RAW DATA] Przycisk ${buttonNum} (${packet.device.shortId}): is pressed (wartość: ${rawData})`);
                                     sendToTasker(buttonNum, "pressed");
                                 } else {
-                                    log(`[STAN] Fizyczny Przycisk ${buttonNum}: is released`);
+                                    log(`[RAW DATA] Przycisk ${buttonNum} (${packet.device.shortId}): is released`);
                                     sendToTasker(buttonNum, "released");
                                 }
                             }
-                        });
+                        }
                     }
                 });
 
