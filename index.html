@@ -2,61 +2,91 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>Ostateczna Naprawa Mostka</title>
+    <title>Surowy Podgląd USB i Jacdac</title>
     <script src="https://unpkg.com/jacdac-ts/dist/jacdac.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #121212; color: #fff; }
-        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #00adb5; border: none; color: white; border-radius: 5px; }
-        #log { background: #222831; padding: 15px; margin-top: 20px; text-align: left; font-family: monospace; min-height: 200px; color: #a3f7bf; white-space: pre-wrap; }
+        body { font-family: sans-serif; text-align: center; padding: 15px; background: #121212; color: #fff; }
+        button { padding: 10px 20px; font-size: 15px; cursor: pointer; background: #00adb5; border: none; color: white; border-radius: 5px; margin: 5px; }
+        button:hover { background: #007a80; }
+        #testIntentBtn { background: #ff2e63; font-size: 13px; padding: 6px 12px; }
+        #testIntentBtn:hover { background: #b81d43; }
+        .box { background: #222831; padding: 12px; margin-top: 15px; border-radius: 5px; text-align: left; }
+        .log { font-family: monospace; min-height: 150px; max-height: 300px; overflow-y: auto; color: #a3f7bf; white-space: pre-wrap; font-size: 13px; }
+        h3 { margin-top: 0; color: #00adb5; border-bottom: 1px solid #393e46; padding-bottom: 5px; }
     </style>
 </head>
 <body>
 
-    <h1>Mostek Naprawczy Jacdac</h1>
-    <button id="connectBtn">POŁĄCZ Z MICRO:BIT</button>
-    <div id="log">Logi systemowe:\n</div>
+    <h2>Podgląd Surowych Danych USB</h2>
+    
+    <button id="connectBtn">1. POŁĄCZ USB</button>
+    <button id="testIntentBtn">TESTOWY STRZAŁ INTENCJI (DLA EASERA)</button>
+
+    <div class="box">
+        <h3>Status i Diagnostyka WWW:</h3>
+        <div id="statusLog" class="log">Czekam na kliknięcie "POŁĄCZ USB"...</div>
+    </div>
+
+    <div class="box">
+        <h3>Dosłowne Pakiety z Micro:bita (Każda wiadomość z kabla):</h3>
+        <div id="rawPacketsLog" class="log">Tutaj pojawią się surowe bajty zaraz po kliknięciu czegokolwiek na płytce...</div>
+    </div>
 
     <script>
         const connectBtn = document.getElementById('connectBtn');
-        const logDiv = document.getElementById('log');
+        const testIntentBtn = document.getElementById('testIntentBtn');
+        const statusLog = document.getElementById('statusLog');
+        const rawPacketsLog = document.getElementById('rawPacketsLog');
 
-        function log(msg) {
-            logDiv.innerText += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+        function logStatus(msg) {
+            statusLog.innerText += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+            statusLog.scrollTop = statusLog.scrollHeight;
         }
 
-        // Funkcja wysyłająca intencję do Easera (Wadery)
-        function sendIntentToEaser() {
-            log("➔ Strzał intencji do Easera!");
+        function logRawPacket(msg) {
+            // Czyścimy początkowy komunikat przy pierwszym pakiecie
+            if (rawPacketsLog.innerText.startsWith("Tutaj pojawią się")) {
+                rawPacketsLog.innerText = "";
+            }
+            rawPacketsLog.innerText += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+            rawPacketsLog.scrollTop = rawPacketsLog.scrollHeight;
+        }
+
+        // Mini guzik do sprawdzenia, czy problem to Android/Easer, czy Jacdac
+        testIntentBtn.addEventListener('click', () => {
+            logStatus("➔ Ręczny test: Wysyłam sygnał guzik1_pressed do Easera...");
             const intentUrl = `intent:#Intent;action=pl.maxis.JACDAC_ACTION;category=android.intent.category.DEFAULT;S.guzik=guzik1_pressed;end`;
             const link = document.createElement('a');
             link.href = intentUrl;
             link.click();
-        }
+        });
 
         connectBtn.addEventListener('click', async () => {
             try {
-                log("Uruchamianie szyny Jacdac...");
-                
-                // Tworzymy transport WebUSB bezpośrednio
+                logStatus("Inicjalizacja WebUSB w przeglądarce...");
                 const bus = jacdac.createWebBus();
-                
-                // Wymuszamy start nasłuchiwania pakietów
+                bus.passive = false;
+
+                // Łapiemy ABSOLUTNIE KAŻDY pakiet, który przechodzi przez szynę danych USB
                 bus.on('packetReceive', (packet) => {
-                    // Kod usługi przycisku (0x1473d260) lub ogólny pakiet zdarzenia
-                    if (packet.serviceNumber !== 0 && packet.isEvent) {
-                        if (packet.eventCode === 0x1) {
-                            log(" FIZYCZNY KLIK WYKRYTY (Event 0x1)");
-                            sendIntentToEaser();
-                        }
+                    // Konwertujemy tablicę bajtów na widoczne cyfry [cite: 2025-04-19]
+                    const rawBytes = packet.data ? Array.from(packet.data).join(', ') : 'brak danych';
+                    
+                    let opisPakietu = `Serwis: 0x${packet.serviceNumber.toString(16)} | Kod: 0x${packet.serviceCommand.toString(16)} | Bajty: [${rawBytes}]`;
+                    
+                    if (packet.isEvent) {
+                        opisPakietu += ` ➔ (Zdarzenie sprzętowe! Kod eventu: 0x${packet.eventCode.toString(16)})`;
                     }
+
+                    logRawPacket(opisPakietu);
                 });
 
-                log("Otwieranie okna parowania przeglądarki...");
+                logStatus("Otwieram systemowe okno parowania USB...");
                 await bus.connect();
-                log(" Sukces! Strona nawiązała kontakt z micro:bitem.");
+                logStatus(" Sukces! Przeglądarka połączyła się z urządzeniem.");
 
             } catch (err) {
-                log(`BŁĄD KODU: ${err.message}`);
+                logStatus(`BŁĄD STARTU: ${err.message}`);
             }
         });
     </script>
