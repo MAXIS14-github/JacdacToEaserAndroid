@@ -46,7 +46,6 @@
         const taskerIpInput = document.getElementById('taskerIp');
 
         let detectedButtons = [];
-        let lastStates = {}; 
         let bus = null;
 
         function log(message) {
@@ -85,53 +84,51 @@
                     throw new Error("Brak wsparcia dla WebUSB w przeglądarce!");
                 }
 
-                log("Inicjalizacja pancernego nasłuchu pakietów...");
+                log("Inicjalizacja niskopoziomowego mostka USB...");
                 bus = jacdac.createWebBus();
-                bus.passive = false; 
+                bus.passive = false; // Wymuszenie roli kontrolera szyny
 
                 await bus.connect();
                 
                 statusDiv.innerText = "Połączono z Jacdac!";
                 statusDiv.style.color = "#00adb5";
-                log("Mostek aktywny. Słucham surowych danych z szyny...");
+                log("Mostek gotowy. Mapowanie podłączonych modułów...");
 
-                bus.on('deviceConnect', (device) => {
-                    log(`Wykryto urządzenie w sieci USB: ${device.shortId}`);
-                    
-                    // Każdemu podłączonemu urządzeniu (oprócz micro:bita) przypisujemy unikalną rolę przycisku
-                    // Zakładamy, że urządzenia inne niż główny mostek to Twoje guziki
-                    if (!detectedButtons.includes(device.deviceId) && device.shortId !== "GS41") {
+                // Mapujemy urządzenia obecne w szynie od razu po połączeniu
+                bus.devices().forEach(device => {
+                    if (device.shortId !== "GS41" && !detectedButtons.includes(device.deviceId)) {
                         detectedButtons.push(device.deviceId);
-                        lastStates[device.deviceId] = 0; // Stan początkowy: puszczony
-                        log(`[MAPOWANIE] Urządzenie ${device.shortId} przypisane jako Przycisk ${detectedButtons.length}`);
+                        log(`[PRZYPISANO] Wykryto moduł ${device.shortId} -> Przycisk ${detectedButtons.length}`);
                     }
                 });
 
-                // CAŁKOWITY PODSŁUCH: Przechwytujemy każdy pakiet krążący w sieci USB
+                // Nasłuchiwanie na nowe wpięcia urządzeń w trakcie pracy
+                bus.on('deviceConnect', (device) => {
+                    if (device.shortId !== "GS41" && !detectedButtons.includes(device.deviceId)) {
+                        detectedButtons.push(device.deviceId);
+                        log(`[PRZYPISANO] Nowy moduł ${device.shortId} -> Przycisk ${detectedButtons.length}`);
+                    }
+                });
+
+                // UNIWERSALNE PRZECHWYTYWANIE ZDARZEŃ FIZYCZNYCH
                 bus.on('packetReceive', (packet) => {
-                    // Interesują nas pakiety z danymi (raporty z rejestrów lub zdarzenia)
-                    if (packet.isRegisterReport || packet.isEvent) {
+                    // Sprawdzamy czy pakiet jest zdarzeniem sprzętowym (Event)
+                    if (packet.isEvent) {
                         const devId = packet.deviceId;
                         
-                        // Sprawdzamy, czy pakiet pochodzi z jednego z zmapowanych guzików
                         if (detectedButtons.includes(devId)) {
                             const buttonNum = detectedButtons.indexOf(devId) + 1;
-                            
-                            // Pobieramy surową wartość liczbową przesłaną w pakiecie danych
-                            // W Jacdac stan isPressed to zazwyczaj pierwszy bajt o wartości 1 lub 0
-                            const rawData = packet.data && packet.data.length > 0 ? packet.data[0] : 0;
-                            
-                            // Jeśli wartość zmieniła się od ostatniego razu
-                            if (rawData !== lastStates[devId]) {
-                                lastStates[devId] = rawData;
-                                
-                                if (rawData > 0) {
-                                    log(`[RAW DATA] Przycisk ${buttonNum} (${packet.device.shortId}): is pressed (wartość: ${rawData})`);
-                                    sendToTasker(buttonNum, "pressed");
-                                } else {
-                                    log(`[RAW DATA] Przycisk ${buttonNum} (${packet.device.shortId}): is released`);
-                                    sendToTasker(buttonNum, "released");
-                                }
+                            const eventCode = packet.eventCode;
+
+                            // 0x1 to kod Jacdac dla zdarzenia wciśnięcia (Down / Is Pressed)
+                            if (eventCode === 0x1) {
+                                log(`[SPRZĘT] Moduł ${packet.device.shortId} (Przycisk ${buttonNum}): is pressed`);
+                                sendToTasker(buttonNum, "pressed");
+                            } 
+                            // 0x2 to kod Jacdac dla zdarzenia zwolnienia (Up / Is Released)
+                            else if (eventCode === 0x2) {
+                                log(`[SPRZĘT] Moduł ${packet.device.shortId} (Przycisk ${buttonNum}): is released`);
+                                sendToTasker(buttonNum, "released");
                             }
                         }
                     }
